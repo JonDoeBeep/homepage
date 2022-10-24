@@ -1,99 +1,228 @@
-import React, { memo, useState } from 'https://cdn.skypack.dev/react';
-import ReactDOM from 'https://cdn.skypack.dev/react-dom';
+import * as PIXI from "https://cdn.skypack.dev/pixi.js@5.x";
+import { KawaseBlurFilter } from "https://cdn.skypack.dev/@pixi/filter-kawase-blur@3.2.0";
+import SimplexNoise from "https://cdn.skypack.dev/simplex-noise@3.0.0";
+import hsl from "https://cdn.skypack.dev/hsl-to-hex";
+import debounce from "https://cdn.skypack.dev/debounce";
 
-const ORB_COUNT = 20;
+// return a random number within a range
+function random(min, max) {
+  return Math.random() * (max - min) + min;
+}
 
-const random = (min, max) => Math.floor(Math.random() * (max - min) + min);
-const iterate = (count, mapper) => [...new Array(count)].map((_, i) => mapper(i));
-const distance = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+// map a number from 1 range to another
+function map(n, start1, end1, start2, end2) {
+  return ((n - start1) / (end1 - start1)) * (end2 - start2) + start2;
+}
 
-const Gooey = ({ id }) => /*#__PURE__*/
-React.createElement("filter", { id: id }, /*#__PURE__*/
-React.createElement("feGaussianBlur", { in: "SourceGraphic", stdDeviation: "25", result: "blur" }), /*#__PURE__*/
-React.createElement("feColorMatrix", { in: "blur", mode: "matrix", values: "1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 100 -5", result: "goo" }), /*#__PURE__*/
-React.createElement("feComposite", { in: "SourceGraphic", in2: "goo", operator: "atop" }));
+// Create a new simplex noise instance
+const simplex = new SimplexNoise();
 
+// ColorPalette class
+class ColorPalette {
+  constructor() {
+    this.setColors();
+    this.setCustomProperties();
+  }
 
+  setColors() {
+    // pick a random hue somewhere between 220 and 360
+    this.hue = ~~random(220, 360);
+    this.complimentaryHue1 = this.hue + 30;
+    this.complimentaryHue2 = this.hue + 60;
+    // define a fixed saturation and lightness
+    this.saturation = 95;
+    this.lightness = 50;
 
-const Blur = ({ id }) => /*#__PURE__*/
-React.createElement("filter", { id: id, x: "-50%", y: "-50%", width: "200%", height: "200%" }, /*#__PURE__*/
-React.createElement("feGaussianBlur", { in: "SourceGraphic", stdDeviation: "20" }));
+    // define a base color
+    this.baseColor = hsl(this.hue, this.saturation, this.lightness);
+    // define a complimentary color, 30 degress away from the base
+    this.complimentaryColor1 = hsl(
+      this.complimentaryHue1,
+      this.saturation,
+      this.lightness
+    );
+    // define a second complimentary color, 60 degrees away from the base
+    this.complimentaryColor2 = hsl(
+      this.complimentaryHue2,
+      this.saturation,
+      this.lightness
+    );
 
+    // store the color choices in an array so that a random one can be picked later
+    this.colorChoices = [
+      this.baseColor,
+      this.complimentaryColor1,
+      this.complimentaryColor2
+    ];
+  }
 
+  randomColor() {
+    // pick a random color
+    return this.colorChoices[~~random(0, this.colorChoices.length)].replace(
+      "#",
+      "0x"
+    );
+  }
 
-const Gradient = ({ id, hue }) => {
-  const h = hue + random(-40, 40);
-  const f = [h, 80, 60];
-  const t = [h + 20, 100, 30];
-  return /*#__PURE__*/(
-    React.createElement("linearGradient", { id: id, x1: "70%", x2: "0%", y1: "70%", y2: "0%" }, /*#__PURE__*/
-    React.createElement("stop", { offset: "0%", "stop-color": `hsl(${t[0]},${t[1]}%,${t[2]}%)`, "stop-opacity": "1" }), /*#__PURE__*/
-    React.createElement("stop", { offset: "100%", "stop-color": `hsl(${f[0]},${f[1]}%,${f[2]}%)`, "stop-opacity": "1" })));
+  setCustomProperties() {
+    // set CSS custom properties so that the colors defined here can be used throughout the UI
+    document.documentElement.style.setProperty("--hue", this.hue);
+    document.documentElement.style.setProperty(
+      "--hue-complimentary1",
+      this.complimentaryHue1
+    );
+    document.documentElement.style.setProperty(
+      "--hue-complimentary2",
+      this.complimentaryHue2
+    );
+  }
+}
 
+// Orb class
+class Orb {
+  // Pixi takes hex colors as hexidecimal literals (0x rather than a string with '#')
+  constructor(fill = 0x000000) {
+    // bounds = the area an orb is "allowed" to move within
+    this.bounds = this.setBounds();
+    // initialise the orb's { x, y } values to a random point within it's bounds
+    this.x = random(this.bounds["x"].min, this.bounds["x"].max);
+    this.y = random(this.bounds["y"].min, this.bounds["y"].max);
 
-};
+    // how large the orb is vs it's original radius (this will modulate over time)
+    this.scale = 1;
 
-const Orb = ({ hue }) => {
-  const r = random(30, 100);
-  const from = [
-  random(0 - r, 1000 + r),
-  random(0 - r, 1000 + r)];
+    // what color is the orb?
+    this.fill = fill;
 
-  const to = [
-  random(0 - r, 1000 + r),
-  random(0 - r, 1000 + r)];
+    // the original radius of the orb, set relative to window height
+    this.radius = random(window.innerHeight / 6, window.innerHeight / 3);
 
-  const d = distance(from, to);
-  const id = random(0, 1000);
-  return /*#__PURE__*/(
-    React.createElement(React.Fragment, null, /*#__PURE__*/
-    React.createElement("circle", {
-      cx: from[0], cy: to[0], r: r,
-      fill: `url(#grad-${id})`,
-      style: {
-        '--duration': `${d / 15}s`,
-        '--from-x': from[0],
-        '--from-y': from[1],
-        '--to-x': to[0],
-        '--to-y': to[1] } }), /*#__PURE__*/
+    // starting points in "time" for the noise/self similar random values
+    this.xOff = random(0, 1000);
+    this.yOff = random(0, 1000);
+    // how quickly the noise/self similar random values step through time
+    this.inc = 0.002;
 
-    React.createElement(Gradient, { id: `grad-${id}`, hue: hue })));
+    // PIXI.Graphics is used to draw 2d primitives (in this case a circle) to the canvas
+    this.graphics = new PIXI.Graphics();
+    this.graphics.alpha = 0.825;
 
+    // 250ms after the last window resize event, recalculate orb positions.
+    window.addEventListener(
+      "resize",
+      debounce(() => {
+        this.bounds = this.setBounds();
+      }, 250)
+    );
+  }
 
-};
+  setBounds() {
+    // how far from the { x, y } origin can each orb move
+    const maxDist =
+      window.innerWidth < 1000 ? window.innerWidth / 3 : window.innerWidth / 5;
+    // the { x, y } origin for each orb (the bottom right of the screen)
+    const originX = window.innerWidth / 1.25;
+    const originY =
+      window.innerWidth < 1000
+        ? window.innerHeight
+        : window.innerHeight / 1.375;
 
-const Orbs = memo(({ hue }) => {
-  return /*#__PURE__*/(
-    React.createElement("svg", { viewBox: "0 0 1000 1000", preserveAspectRatio: "xMinYMin slice", style: { background: `linear-gradient(hsl(${hue},${80}%,${90}%), hsl(${hue},${100}%,${80}%))` } }, /*#__PURE__*/
-    React.createElement("g", { filter: "url(#blur)" }, /*#__PURE__*/
-    React.createElement("g", { filter: "url(#gooey)" },
-    iterate(ORB_COUNT, (i) => /*#__PURE__*/
-    React.createElement(Orb, { key: i, hue: hue })))), /*#__PURE__*/
+    // allow each orb to move x distance away from it's x / y origin
+    return {
+      x: {
+        min: originX - maxDist,
+        max: originX + maxDist
+      },
+      y: {
+        min: originY - maxDist,
+        max: originY + maxDist
+      }
+    };
+  }
 
+  update() {
+    // self similar "psuedo-random" or noise values at a given point in "time"
+    const xNoise = simplex.noise2D(this.xOff, this.xOff);
+    const yNoise = simplex.noise2D(this.yOff, this.yOff);
+    const scaleNoise = simplex.noise2D(this.xOff, this.yOff);
 
+    // map the xNoise/yNoise values (between -1 and 1) to a point within the orb's bounds
+    this.x = map(xNoise, -1, 1, this.bounds["x"].min, this.bounds["x"].max);
+    this.y = map(yNoise, -1, 1, this.bounds["y"].min, this.bounds["y"].max);
+    // map scaleNoise (between -1 and 1) to a scale value somewhere between half of the orb's original size, and 100% of it's original size
+    this.scale = map(scaleNoise, -1, 1, 0.5, 1);
 
-    React.createElement("defs", null, /*#__PURE__*/
-    React.createElement(Gooey, { id: "gooey" }), /*#__PURE__*/
-    React.createElement(Blur, { id: "blur" }))));
+    // step through "time"
+    this.xOff += this.inc;
+    this.yOff += this.inc;
+  }
 
+  render() {
+    // update the PIXI.Graphics position and scale values
+    this.graphics.x = this.x;
+    this.graphics.y = this.y;
+    this.graphics.scale.set(this.scale);
 
+    // clear anything currently drawn to graphics
+    this.graphics.clear();
 
+    // tell graphics to fill any shapes drawn after this with the orb's fill color
+    this.graphics.beginFill(this.fill);
+    // draw a circle at { 0, 0 } with it's size set by this.radius
+    this.graphics.drawCircle(0, 0, this.radius);
+    // let graphics know we won't be filling in any more shapes
+    this.graphics.endFill();
+  }
+}
+
+// Create PixiJS app
+const app = new PIXI.Application({
+  // render to <canvas class="orb-canvas"></canvas>
+  view: document.querySelector(".orb-canvas"),
+  // auto adjust size to fit the current window
+  resizeTo: window,
+  // transparent background, we will be creating a gradient background later using CSS
+  transparent: true
 });
 
-const App = () => {
-  const [hue, setHue] = useState(random(0, 360));
-  return /*#__PURE__*/(
-    React.createElement(React.Fragment, null, /*#__PURE__*/
-    React.createElement(Orbs, { hue: hue }), /*#__PURE__*/
-    React.createElement("div", { className: "banner" }, /*#__PURE__*/
-    React.createElement("h1", null, "Generative Gradient Blobs"), /*#__PURE__*/
-    React.createElement("p", null, "These SVG blobs are randomly generated and animated. Each blob is given a unique gradient (within an initial hue range) and a movement trajectory. To maintain a uniform velocity, the animation duration is calculated based on the length of the trajectory."), /*#__PURE__*/
-    React.createElement("button", { style: { '--hue': hue }, onClick: () => setHue(random(0, 360)) }, "Regenerate"))));
+app.stage.filters = [new KawaseBlurFilter(30, 10, true)];
 
+// Create colour palette
+const colorPalette = new ColorPalette();
 
+// Create orbs
+const orbs = [];
 
-};
+for (let i = 0; i < 10; i++) {
+  const orb = new Orb(colorPalette.randomColor());
 
-ReactDOM.render( /*#__PURE__*/
-React.createElement(App, null),
-document.body);
+  app.stage.addChild(orb.graphics);
+
+  orbs.push(orb);
+}
+
+// Animate!
+if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  app.ticker.add(() => {
+    orbs.forEach((orb) => {
+      orb.update();
+      orb.render();
+    });
+  });
+} else {
+  orbs.forEach((orb) => {
+    orb.update();
+    orb.render();
+  });
+}
+
+document
+  .querySelector(".overlay__btn--colors")
+  .addEventListener("click", () => {
+    colorPalette.setColors();
+    colorPalette.setCustomProperties();
+
+    orbs.forEach((orb) => {
+      orb.fill = colorPalette.randomColor();
+    });
+  });
